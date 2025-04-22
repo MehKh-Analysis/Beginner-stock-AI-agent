@@ -1,0 +1,7 @@
+streamlit
+yfinance
+pandas
+sqlalchemy
+mysql-connector-python
+openai
+plotly
