@@ -21,7 +21,8 @@ Whether you're just starting out or looking to expand your investment knowledge,
 
 ---
 
-![image]
+
 <img width="1295" alt="Screenshot 2025-04-26 at 6 50 18 PM" src="https://github.com/user-attachments/assets/e40eecb3-03a2-481b-bb11-494376fde14b" />
-<img width="995" alt="Screenshot 2025-04-26 at 7 51 29 PM" src="https://github.com/user-attachments/assets/83862d1f-313f-4a28-b73a-5126f6d64837" />
+<img width="778" alt="Screenshot 2025-04-26 at 6 47 33 PM" src="https://github.com/user-attachments/assets/30e12b03-bac3-4394-b8c8-4ad9acbafb1e" />
+
 <img width="847" alt="Screenshot 2025-04-26 at 7 51 43 PM" src="https://github.com/user-attachments/assets/ad1068c4-ef6f-4fc7-b6ca-25a9f8ef2bb9" />
