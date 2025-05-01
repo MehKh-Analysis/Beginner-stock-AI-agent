@@ -4,8 +4,7 @@ import pandas as pd
 from openai import OpenAI
 import plotly.express as px
 import re
-import time                                   # NEW
-from yfinance.exceptions import YFRateLimitError   # NEW
+import time
 
 # Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["openai_api_key"])
@@ -14,26 +13,37 @@ client = OpenAI(api_key=st.secrets["openai_api_key"])
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker, period="1mo", interval="1d"):
     """
-    Fetch price history. If Yahoo throttles us,
-    wait 3 sec and retry once.
+    Fetch price history. Retry politely if Yahoo throttles us.
     """
-    try:
-        return yf.Ticker(ticker).history(period=period, interval=interval)
-    except YFRateLimitError:
-        time.sleep(3)  # polite back-off
-        return yf.Ticker(ticker).history(period=period, interval=interval)
+    for attempt in range(2):
+        try:
+            ticker_obj = yf.Ticker(ticker)
+            data = ticker_obj.history(period=period, interval=interval)
+            if data.empty:
+                raise ValueError("Empty data returned")
+            return data
+        except Exception as e:
+            if "rate limit" in str(e).lower():
+                time.sleep(3)
+            elif attempt == 1:
+                raise e
+            else:
+                time.sleep(1)
+    raise RuntimeError("Rate-limited multiple times. Try again later.")
+
 
 def extract_key_metrics(info):
     return {
-        "Previous Close":          info.get("previousClose", "N/A"),
-        "Open":                    info.get("open", "N/A"),
-        "Bid":                     info.get("bid", "N/A"),
-        "Day's Range":             f"{info.get('dayLow', 'N/A')} – {info.get('dayHigh', 'N/A')}",
-        "Average Volume":          info.get("averageVolume", "N/A"),
-        "Market Cap":              info.get("marketCap", "N/A"),
-        "Earnings Date":           info.get("earningsDate", "N/A"),
-        "1-Year Target Estimate":  info.get("targetMeanPrice", "N/A"),
+        "Previous Close": info.get("previousClose", "N/A"),
+        "Open": info.get("open", "N/A"),
+        "Bid": info.get("bid", "N/A"),
+        "Day's Range": f"{info.get('dayLow', 'N/A')} – {info.get('dayHigh', 'N/A')}",
+        "Average Volume": info.get("averageVolume", "N/A"),
+        "Market Cap": info.get("marketCap", "N/A"),
+        "Earnings Date": info.get("earningsDate", "N/A"),
+        "1-Year Target Estimate": info.get("targetMeanPrice", "N/A"),
     }
+
 
 @st.cache_data(ttl=3600)
 def generate_explanation(ticker, metrics):
@@ -49,6 +59,7 @@ def generate_explanation(ticker, metrics):
     )
     return resp.choices[0].message.content
 
+
 @st.cache_data(ttl=3600)
 def summarize_stock_data(ticker, history):
     prompt = (
@@ -60,6 +71,7 @@ def summarize_stock_data(ticker, history):
         messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
+
 
 def generate_sentiment(ticker, history):
     prompt = (
@@ -73,6 +85,7 @@ def generate_sentiment(ticker, history):
     )
     return resp.choices[0].message.content
 
+
 @st.cache_data(ttl=3600)
 def get_random_stock_fact():
     prompt = (
@@ -84,6 +97,7 @@ def get_random_stock_fact():
         messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
+
 
 # ──────────────────────────────────────────────────────────────
 # UI
@@ -102,58 +116,55 @@ ticker = st.text_input("Enter a stock ticker (e.g., AAPL, TSLA, AMZN):")
 if ticker:
     st.info(f"💡 Did you know? {get_random_stock_fact()}")
 
-# ──────────────────────────────────────────────────────────────
-# Main action
-# ──────────────────────────────────────────────────────────────
 if st.button("Get Insights") and ticker:
     try:
         stock_data = get_stock_data(ticker)
-    except YFRateLimitError:
-        st.error("Yahoo Finance is rate-limiting right now. Please wait a few seconds and try again.")
+    except Exception as e:
+        st.error(f"Error: {str(e)}")
         st.stop()
 
-    info         = yf.Ticker(ticker).info
-    key_metrics  = extract_key_metrics(info)
+    if stock_data.empty:
+        st.warning("No data found for this ticker. Please try another.")
+        st.stop()
 
-    summary     = summarize_stock_data(ticker, stock_data)
+    ticker_obj = yf.Ticker(ticker)
+    info = ticker_obj.info
+    key_metrics = extract_key_metrics(info)
+
+    summary = summarize_stock_data(ticker, stock_data)
     explanation = generate_explanation(ticker, key_metrics)
-    sentiment   = generate_sentiment(ticker, stock_data)
+    sentiment = generate_sentiment(ticker, stock_data)
 
-    # Recent-data table
     recent = stock_data.tail(5).copy()
     recent["Daily Change %"] = (recent["Close"].pct_change().fillna(0) * 100).round(2)
 
-    # Price-trend line chart
     price_trend_fig = px.line(
         stock_data, x=stock_data.index, y="Close",
         title=f"{ticker.upper()} – Closing Price Over Time",
     )
 
-    # Bold metric names in explanation
     bolded_explanation = re.sub(r"- ([^:]+):", r"- **\\1**:", explanation)
 
-    tab1, tab2 = st.tabs(["📊 Basics", "💡 Insights"])
+    tab1, tab2 = st.tabs(["\ud83d\udcca Basics", "💡 Insights"])
 
-    # — Basics —
     with tab1:
         st.subheader("🧠 Explanation of Key Terms You Really Need in the Market")
         st.markdown(bolded_explanation)
 
-    # — Insights —
     with tab2:
         st.plotly_chart(price_trend_fig)
 
         st.subheader("📌 Recent Stock Data")
         st.dataframe(
             recent.style
-                  .highlight_max(subset=["Daily Change %"], color="green")
-                  .highlight_min(subset=["Daily Change %"], color="red")
+                .highlight_max(subset=["Daily Change %"], color="green")
+                .highlight_min(subset=["Daily Change %"], color="red")
         )
 
         st.subheader("📝 Summary of Recent Prices")
         st.write(summary)
 
-        st.subheader("🤔 Should I Buy This?")
+        st.subheader("🧐 Should I Buy This?")
         st.info(sentiment)
 
         st.subheader("📊 Key Metrics")
