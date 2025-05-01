@@ -7,8 +7,9 @@ from openai import OpenAI
 import finnhub
 
 # ────────── API Keys ──────────
-finnhub_client = finnhub.Client(api_key=st.secrets["finnhub_api_key"])  # Fetching from secrets
+finnhub_client = finnhub.Client(api_key="d09r189r01qus8resq8gd09r189r01qus8resq90")
 openai_client = OpenAI(api_key=st.secrets["openai_api_key"])  # Keep OpenAI key in secrets
+
 # ────────── Caching ──────────
 @st.cache_data(ttl=3600)
 def get_stock_candles(symbol, resolution="D", count=30):
@@ -83,12 +84,6 @@ if ticker and st.button("Get Insights"):
         fig = px.line(history, x=history.index, y="Close", title=f"{ticker.upper()} – Closing Prices")
         st.plotly_chart(fig)
 
-        st.subheader("🗂️ Recent Data")
-        st.dataframe(history.tail(5))
-
-        st.subheader("🏢 Company Info")
-        st.json(info)
-
         explanation = generate_explanation(ticker, info)
         st.subheader("📘 What This Means")
         st.markdown(re.sub(r"- ([^:]+):", r"- **\1**:", explanation))
@@ -100,3 +95,17 @@ if ticker and st.button("Get Insights"):
         sentiment = get_sentiment_opinion(ticker, history)
         st.subheader("🤔 Should I Buy?")
         st.info(sentiment)
+
+    tab1, tab2 = st.tabs(["📊 Basics", "💡 Insights"])
+
+    # — Basics — Nothing shown here anymore
+    with tab1:
+        st.write("")
+
+    # — Insights —
+    with tab2:
+        st.subheader("📌 Recent Stock Data")
+        st.dataframe(history.tail(5))
+
+        st.subheader("🏢 Company Info")
+        st.json(info)
