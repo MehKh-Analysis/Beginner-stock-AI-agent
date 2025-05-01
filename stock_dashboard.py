@@ -5,40 +5,14 @@ from openai import OpenAI
 import plotly.express as px
 import re
 
-# ──────────────────────────────────────────────────────────────
-# OpenAI client (expects your key in Streamlit secrets)
-# ──────────────────────────────────────────────────────────────
+# Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["openai_api_key"])
 
 # ──────────────────────────────────────────────────────────────
-# Data utilities
-# ──────────────────────────────────────────────────────────────
-import time
-from yfinance.exceptions import YFRateLimitError
-
-# ──────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner="Fetching Yahoo Finance data…")
-def fetch_yf_bundle(ticker_symbol, period="1mo", interval="1d"):
-    """
-    One Yahoo call for both .history and .info.
-    Retries once on rate-limit.
-    Returns (history_df, info_dict).
-    """
-    try:
-        tk = yf.Ticker(ticker_symbol)
-        history = tk.history(period=period, interval=interval)
-        info    = tk.info
-        return history, info
-
-    except YFRateLimitError:
-        # polite back-off
-        time.sleep(3)
-        # second (and final) attempt
-        tk = yf.Ticker(ticker_symbol)
-        history = tk.history(period=period, interval=interval)
-        info    = tk.info
-        return history, info
-
+@st.cache_data(ttl=3600)
+def get_stock_data(ticker, period="1mo", interval="1d"):
+    stock = yf.Ticker(ticker)
+    return stock.history(period=period, interval=interval)
 
 def extract_key_metrics(info):
     return {
@@ -62,7 +36,7 @@ def generate_explanation(ticker, metrics):
     )
     resp = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}]
+        messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
 
@@ -70,47 +44,47 @@ def generate_explanation(ticker, metrics):
 def summarize_stock_data(ticker, history):
     prompt = (
         f"Based on recent stock data for {ticker}, summarize the short-term price trend "
-        "and potential risks in 2-3 beginner-friendly sentences."
+        "and potential risks in no more than 2-3 beginner-friendly sentences."
     )
     resp = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}]
+        messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
 
 def generate_sentiment(ticker, history):
     prompt = (
-        f"A beginner investor is considering buying {ticker}. Here’s recent price data:\n"
+        f"A beginner investor is considering buying {ticker}. Recent price data:\n"
         f"{history.tail(5).to_string()}\n\n"
-        "Give a short 2-3 sentence reaction summarizing investment appeal, risk level, and outlook in a casual tone."
+        "Give a short 2-3 sentence reaction summarizing appeal, risk, and outlook in a casual tone."
     )
     resp = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}]
+        messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
 
 @st.cache_data(ttl=3600)
 def get_random_stock_fact():
     prompt = (
-        "Give me one short, surprising, or educational stock-market fact that a beginner might not know. "
+        "Give me one short, surprising, or educational stock-market fact a beginner might not know. "
         "Make it fun and easy to remember."
     )
     resp = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}]
+        messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
 
 # ──────────────────────────────────────────────────────────────
-# UI – header & cache-clear button
+# UI
 # ──────────────────────────────────────────────────────────────
 st.markdown(
-    "<h1 style='text-align:center;color:#1f77b4;'>Real-Time LLM-Powered Stock Helper</h1>",
-    unsafe_allow_html=True
+    "<h1 style='text-align:center;color:#1f77b4;'>Real-Time LLM-Powered AI Agent for Stock Market Beginners</h1>",
+    unsafe_allow_html=True,
 )
 
-if st.button('🔄 Clear Cache'):
+if st.button("🔄 Clear Cache"):
     st.cache_data.clear()
     st.success("Cache cleared! Please rerun the app.")
 
@@ -120,49 +94,46 @@ if ticker:
     st.info(f"💡 Did you know? {get_random_stock_fact()}")
 
 # ──────────────────────────────────────────────────────────────
-# Main action button
+# Main action
 # ──────────────────────────────────────────────────────────────
 if st.button("Get Insights") and ticker:
-    # Fetch Yahoo data in one shot (with built-in retry)
-    stock_data, info = fetch_yf_bundle(ticker)
-    key_metrics      = extract_key_metrics(info)
+    stock_data = get_stock_data(ticker)
+    info       = yf.Ticker(ticker).info
+    key_metrics = extract_key_metrics(info)
 
-
-    # LLM calls
-    explanation = generate_explanation(ticker, key_metrics)
     summary     = summarize_stock_data(ticker, stock_data)
+    explanation = generate_explanation(ticker, key_metrics)
     sentiment   = generate_sentiment(ticker, stock_data)
 
-    # Prep recent-data table
+    # Recent-data table
     recent = stock_data.tail(5).copy()
     recent["Daily Change %"] = (recent["Close"].pct_change().fillna(0) * 100).round(2)
 
     # Price-trend line chart
     price_trend_fig = px.line(
         stock_data, x=stock_data.index, y="Close",
-        title=f"{ticker.upper()} – Closing Price Over Time"
+        title=f"{ticker.upper()} – Closing Price Over Time",
     )
 
-    # Bold key terms in LLM explanation
-    bolded_explanation = re.sub(r"- ([^:]+):", r"- **\1**:", explanation)
+    # Bold metric names in explanation
+    bolded_explanation = re.sub(r"- ([^:]+):", r"- **\\1**:", explanation)
 
-    # Tabs
     tab1, tab2 = st.tabs(["📊 Basics", "💡 Insights"])
 
-    # -------- Basics tab --------
+    # — Basics —
     with tab1:
-        st.subheader("🧠 Explanation of Key Terms")
+        st.subheader("🧠 Explanation of Key Terms You Really Need in the Market")
         st.markdown(bolded_explanation)
 
-    # -------- Insights tab --------
+    # — Insights —
     with tab2:
         st.plotly_chart(price_trend_fig)
 
         st.subheader("📌 Recent Stock Data")
         st.dataframe(
             recent.style
-                  .highlight_max(subset=['Daily Change %'], color='green')
-                  .highlight_min(subset=['Daily Change %'], color='red')
+                  .highlight_max(subset=["Daily Change %"], color="green")
+                  .highlight_min(subset=["Daily Change %"], color="red")
         )
 
         st.subheader("📝 Summary of Recent Prices")
