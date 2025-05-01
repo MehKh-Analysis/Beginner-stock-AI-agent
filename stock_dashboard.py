@@ -1,171 +1,102 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-from openai import OpenAI
 import plotly.express as px
 import re
 import time
+from openai import OpenAI
+import finnhub
 
-# Initialize OpenAI client
-client = OpenAI(api_key=st.secrets["openai_api_key"])
-
-# ──────────────────────────────────────────────────────────────
+# ────────── API Keys ──────────
+finnhub_client = finnhub.Client(api_key=st.secrets["finnhub_api_key"])  # Fetching from secrets
+openai_client = OpenAI(api_key=st.secrets["openai_api_key"])  # Keep OpenAI key in secrets
+# ────────── Caching ──────────
 @st.cache_data(ttl=3600)
-def get_stock_data(ticker, period="1mo", interval="1d"):
-    """
-    Fetch price history. Retry politely if Yahoo throttles us.
-    """
-    for attempt in range(2):
-        try:
-            ticker_obj = yf.Ticker(ticker)
-            data = ticker_obj.history(period=period, interval=interval)
-            if data.empty:
-                raise ValueError("Empty data returned")
-            return data
-        except Exception as e:
-            if "rate limit" in str(e).lower():
-                time.sleep(3)
-            elif attempt == 1:
-                raise e
-            else:
-                time.sleep(1)
-    raise RuntimeError("Rate-limited multiple times. Try again later.")
-
-
-def extract_key_metrics(info):
-    return {
-        "Previous Close": info.get("previousClose", "N/A"),
-        "Open": info.get("open", "N/A"),
-        "Bid": info.get("bid", "N/A"),
-        "Day's Range": f"{info.get('dayLow', 'N/A')} – {info.get('dayHigh', 'N/A')}",
-        "Average Volume": info.get("averageVolume", "N/A"),
-        "Market Cap": info.get("marketCap", "N/A"),
-        "Earnings Date": info.get("earningsDate", "N/A"),
-        "1-Year Target Estimate": info.get("targetMeanPrice", "N/A"),
-    }
-
+def get_stock_candles(symbol, resolution="D", count=30):
+    now = int(time.time())
+    past = now - count * 86400
+    candles = finnhub_client.stock_candles(symbol, resolution, past, now)
+    if candles['s'] != 'ok':
+        return pd.DataFrame()
+    df = pd.DataFrame({
+        "Date": pd.to_datetime(candles["t"], unit="s"),
+        "Open": candles["o"],
+        "High": candles["h"],
+        "Low": candles["l"],
+        "Close": candles["c"],
+        "Volume": candles["v"],
+    })
+    df.set_index("Date", inplace=True)
+    return df
 
 @st.cache_data(ttl=3600)
-def generate_explanation(ticker, metrics):
-    metric_text = "\n".join(f"- {k}: {v}" for k, v in metrics.items())
-    prompt = (
-        f"A user has looked up the stock {ticker}. Here are some key metrics:\n"
-        f"{metric_text}\n\n"
-        "Please explain each term and its value in simple terms suitable for someone new to investing."
-    )
-    resp = client.chat.completions.create(
+def get_company_info(symbol):
+    return finnhub_client.company_profile2(symbol=symbol)
+
+@st.cache_data(ttl=3600)
+def generate_explanation(ticker, info):
+    key_points = "\n".join([f"- {k}: {v}" for k, v in info.items() if isinstance(v, (str, int, float))])
+    prompt = f"Explain the following company data for {ticker} in simple terms:\n{key_points}"
+    resp = openai_client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
 
+@st.cache_data(ttl=3600)
+def summarize_price_trend(ticker, history):
+    prompt = f"Summarize the recent trend for {ticker} based on this data:\n{history.tail(5).to_string()}"
+    resp = openai_client.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "system", "content": prompt}],
+    )
+    return resp.choices[0].message.content
 
 @st.cache_data(ttl=3600)
-def summarize_stock_data(ticker, history):
-    prompt = (
-        f"Based on recent stock data for {ticker}, summarize the short-term price trend "
-        "and potential risks in no more than 2–3 beginner-friendly sentences."
-    )
-    resp = client.chat.completions.create(
+def get_sentiment_opinion(ticker, history):
+    prompt = f"Give a casual 2-3 sentence opinion on whether {ticker} seems appealing to a beginner investor based on this data:\n{history.tail(5).to_string()}"
+    resp = openai_client.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "system", "content": prompt}],
     )
     return resp.choices[0].message.content
 
-
-def generate_sentiment(ticker, history):
-    prompt = (
-        f"A beginner investor is considering buying {ticker}. Recent price data:\n"
-        f"{history.tail(5).to_string()}\n\n"
-        "Give a short 2-3 sentence reaction summarizing appeal, risk, and outlook in a casual tone."
-    )
-    resp = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
-    )
-    return resp.choices[0].message.content
-
-
-@st.cache_data(ttl=3600)
-def get_random_stock_fact():
-    prompt = (
-        "Give me one short, surprising, or educational stock-market fact a beginner might not know. "
-        "Make it fun and easy to remember."
-    )
-    resp = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
-    )
-    return resp.choices[0].message.content
-
-
-# ──────────────────────────────────────────────────────────────
-# UI
-# ──────────────────────────────────────────────────────────────
-st.markdown(
-    "<h1 style='text-align:center;color:#1f77b4;'>Real-Time LLM-Powered AI Agent for Stock-Market Beginners</h1>",
-    unsafe_allow_html=True,
-)
+# ────────── UI ──────────
+st.markdown("<h1 style='text-align:center;'>📊 Stock Insights for Beginners (Powered by Finnhub & GPT)</h1>", unsafe_allow_html=True)
 
 if st.button("🔄 Clear Cache"):
     st.cache_data.clear()
-    st.success("Cache cleared! Please rerun the app.")
+    st.success("Cache cleared!")
 
-ticker = st.text_input("Enter a stock ticker (e.g., AAPL, TSLA, AMZN):")
+ticker = st.text_input("Enter stock ticker (e.g., AAPL, TSLA):")
 
-if ticker:
-    st.info(f"💡 Did you know? {get_random_stock_fact()}")
+if ticker and st.button("Get Insights"):
+    with st.spinner("Fetching stock data and AI insights..."):
+        info = get_company_info(ticker)
+        history = get_stock_candles(ticker)
+    
+    if history.empty:
+        st.error("❌ Could not fetch data. Try a different ticker or later.")
+    else:
+        history["Daily Change %"] = (history["Close"].pct_change().fillna(0) * 100).round(2)
 
-if st.button("Get Insights") and ticker:
-    try:
-        stock_data = get_stock_data(ticker)
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-        st.stop()
+        st.subheader("📈 Price Trend")
+        fig = px.line(history, x=history.index, y="Close", title=f"{ticker.upper()} – Closing Prices")
+        st.plotly_chart(fig)
 
-    if stock_data.empty:
-        st.warning("No data found for this ticker. Please try another.")
-        st.stop()
+        st.subheader("🗂️ Recent Data")
+        st.dataframe(history.tail(5))
 
-    ticker_obj = yf.Ticker(ticker)
-    info = ticker_obj.info
-    key_metrics = extract_key_metrics(info)
+        st.subheader("🏢 Company Info")
+        st.json(info)
 
-    summary = summarize_stock_data(ticker, stock_data)
-    explanation = generate_explanation(ticker, key_metrics)
-    sentiment = generate_sentiment(ticker, stock_data)
+        explanation = generate_explanation(ticker, info)
+        st.subheader("📘 What This Means")
+        st.markdown(re.sub(r"- ([^:]+):", r"- **\1**:", explanation))
 
-    recent = stock_data.tail(5).copy()
-    recent["Daily Change %"] = (recent["Close"].pct_change().fillna(0) * 100).round(2)
-
-    price_trend_fig = px.line(
-        stock_data, x=stock_data.index, y="Close",
-        title=f"{ticker.upper()} – Closing Price Over Time",
-    )
-
-    bolded_explanation = re.sub(r"- ([^:]+):", r"- **\\1**:", explanation)
-
-    tab1, tab2 = st.tabs(["\ud83d\udcca Basics", "💡 Insights"])
-
-    with tab1:
-        st.subheader("🧠 Explanation of Key Terms You Really Need in the Market")
-        st.markdown(bolded_explanation)
-
-    with tab2:
-        st.plotly_chart(price_trend_fig)
-
-        st.subheader("📌 Recent Stock Data")
-        st.dataframe(
-            recent.style
-                .highlight_max(subset=["Daily Change %"], color="green")
-                .highlight_min(subset=["Daily Change %"], color="red")
-        )
-
-        st.subheader("📝 Summary of Recent Prices")
+        summary = summarize_price_trend(ticker, history)
+        st.subheader("📝 Price Summary")
         st.write(summary)
 
-        st.subheader("🧐 Should I Buy This?")
+        sentiment = get_sentiment_opinion(ticker, history)
+        st.subheader("🤔 Should I Buy?")
         st.info(sentiment)
-
-        st.subheader("📊 Key Metrics")
-        st.json(key_metrics)
