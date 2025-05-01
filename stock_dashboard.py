@@ -13,9 +13,32 @@ client = OpenAI(api_key=st.secrets["openai_api_key"])
 # ──────────────────────────────────────────────────────────────
 # Data utilities
 # ──────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
-def get_stock_data(ticker, period="1mo", interval="1d"):
-    return yf.Ticker(ticker).history(period=period, interval=interval)
+import time
+from yfinance.exceptions import YFRateLimitError
+
+# ──────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner="Fetching Yahoo Finance data…")
+def fetch_yf_bundle(ticker_symbol, period="1mo", interval="1d"):
+    """
+    One Yahoo call for both .history and .info.
+    Retries once on rate-limit.
+    Returns (history_df, info_dict).
+    """
+    try:
+        tk = yf.Ticker(ticker_symbol)
+        history = tk.history(period=period, interval=interval)
+        info    = tk.info
+        return history, info
+
+    except YFRateLimitError:
+        # polite back-off
+        time.sleep(3)
+        # second (and final) attempt
+        tk = yf.Ticker(ticker_symbol)
+        history = tk.history(period=period, interval=interval)
+        info    = tk.info
+        return history, info
+
 
 def extract_key_metrics(info):
     return {
@@ -100,10 +123,10 @@ if ticker:
 # Main action button
 # ──────────────────────────────────────────────────────────────
 if st.button("Get Insights") and ticker:
-    # Fetch data & metrics
-    stock_data  = get_stock_data(ticker)
-    info        = yf.Ticker(ticker).info
-    key_metrics = extract_key_metrics(info)
+    # Fetch Yahoo data in one shot (with built-in retry)
+    stock_data, info = fetch_yf_bundle(ticker)
+    key_metrics      = extract_key_metrics(info)
+
 
     # LLM calls
     explanation = generate_explanation(ticker, key_metrics)
