@@ -4,6 +4,8 @@ import pandas as pd
 from openai import OpenAI
 import plotly.express as px
 import re
+import time                                   # NEW
+from yfinance.exceptions import YFRateLimitError   # NEW
 
 # Initialize OpenAI client
 client = OpenAI(api_key=st.secrets["openai_api_key"])
@@ -11,15 +13,22 @@ client = OpenAI(api_key=st.secrets["openai_api_key"])
 # ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600)
 def get_stock_data(ticker, period="1mo", interval="1d"):
-    stock = yf.Ticker(ticker)
-    return stock.history(period=period, interval=interval)
+    """
+    Fetch price history. If Yahoo throttles us,
+    wait 3 sec and retry once.
+    """
+    try:
+        return yf.Ticker(ticker).history(period=period, interval=interval)
+    except YFRateLimitError:
+        time.sleep(3)  # polite back-off
+        return yf.Ticker(ticker).history(period=period, interval=interval)
 
 def extract_key_metrics(info):
     return {
         "Previous Close":          info.get("previousClose", "N/A"),
         "Open":                    info.get("open", "N/A"),
         "Bid":                     info.get("bid", "N/A"),
-        "Day's Range":             f"{info.get('dayLow', 'N/A')} - {info.get('dayHigh', 'N/A')}",
+        "Day's Range":             f"{info.get('dayLow', 'N/A')} – {info.get('dayHigh', 'N/A')}",
         "Average Volume":          info.get("averageVolume", "N/A"),
         "Market Cap":              info.get("marketCap", "N/A"),
         "Earnings Date":           info.get("earningsDate", "N/A"),
@@ -44,7 +53,7 @@ def generate_explanation(ticker, metrics):
 def summarize_stock_data(ticker, history):
     prompt = (
         f"Based on recent stock data for {ticker}, summarize the short-term price trend "
-        "and potential risks in no more than 2-3 beginner-friendly sentences."
+        "and potential risks in no more than 2–3 beginner-friendly sentences."
     )
     resp = client.chat.completions.create(
         model="gpt-4",
@@ -80,7 +89,7 @@ def get_random_stock_fact():
 # UI
 # ──────────────────────────────────────────────────────────────
 st.markdown(
-    "<h1 style='text-align:center;color:#1f77b4;'>Real-Time LLM-Powered AI Agent for Stock Market Beginners</h1>",
+    "<h1 style='text-align:center;color:#1f77b4;'>Real-Time LLM-Powered AI Agent for Stock-Market Beginners</h1>",
     unsafe_allow_html=True,
 )
 
@@ -97,9 +106,14 @@ if ticker:
 # Main action
 # ──────────────────────────────────────────────────────────────
 if st.button("Get Insights") and ticker:
-    stock_data = get_stock_data(ticker)
-    info       = yf.Ticker(ticker).info
-    key_metrics = extract_key_metrics(info)
+    try:
+        stock_data = get_stock_data(ticker)
+    except YFRateLimitError:
+        st.error("Yahoo Finance is rate-limiting right now. Please wait a few seconds and try again.")
+        st.stop()
+
+    info         = yf.Ticker(ticker).info
+    key_metrics  = extract_key_metrics(info)
 
     summary     = summarize_stock_data(ticker, stock_data)
     explanation = generate_explanation(ticker, key_metrics)
