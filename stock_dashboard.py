@@ -109,3 +109,4 @@ if ticker and st.button("Get Insights"):
 
         st.subheader("🏢 Company Info")
         st.json(info)
+
