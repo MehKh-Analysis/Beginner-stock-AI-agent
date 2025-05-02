@@ -18,18 +18,38 @@ RAPID_HEADERS = {
 }
 
 @st.cache_data(ttl=3600, show_spinner="Fetching price data…")
+@st.cache_data(ttl=3600, show_spinner="Fetching price data…")
 def get_stock_data(ticker, range_="1mo", interval="1d"):
-    """
-    RapidAPI ‘get-chart’ → returns DataFrame with DateTime index + Close column.
-    """
     url = "https://apidojo-yahoo-finance-v1.p.rapidapi.com/stock/v3/get-chart"
     params = {"symbol": ticker, "range": range_, "interval": interval, "region": "US"}
-    data = requests.get(url, params=params, headers=RAPID_HEADERS, timeout=10).json()
-    ts = data["chart"]["result"][0]
+    resp   = requests.get(url, params=params, headers=RAPID_HEADERS, timeout=10)
+
+    # Quota check
+    if resp.status_code == 429:
+        raise DataFetchError("RapidAPI quota exceeded (HTTP 429).")
+
+    data = resp.json()
+
+    # Structure validation
+    if (
+        not data
+        or "chart" not in data
+        or not data["chart"].get("result")
+        or data["chart"]["result"][0] is None
+    ):
+        raise DataFetchError(
+            f"Ticker ‘{ticker}’ returned no chart data. "
+            "Check the symbol spelling or try again later."
+        )
+
+    ts     = data["chart"]["result"][0]
     closes = ts["indicators"]["quote"][0]["close"]
-    df = pd.DataFrame({"Close": closes},
-                      index=pd.to_datetime(ts["timestamp"], unit="s"))
+    df     = pd.DataFrame(
+        {"Close": closes},
+        index=pd.to_datetime(ts["timestamp"], unit="s")
+    )
     return df
+
 
 @st.cache_data(ttl=43200, show_spinner="Fetching fundamentals…")
 def get_stock_info(ticker):
