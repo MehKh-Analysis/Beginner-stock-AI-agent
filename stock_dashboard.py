@@ -1,8 +1,12 @@
 import streamlit as st
-import requests, pandas as pd, time
+import requests, pandas as pd
 from openai import OpenAI
 import plotly.express as px
 import re
+
+# Custom exception
+class DataFetchError(Exception):
+    pass
 
 # ───────────────────────────────────────────────
 # ❶  OpenAI client
