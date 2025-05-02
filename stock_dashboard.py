@@ -25,20 +25,26 @@ class DataFetchError(Exception):
 # ─── 3.  Price history helper (historical)  ──────────────────
 @st.cache_data(ttl=3600, show_spinner="Fetching price data…")
 def get_stock_data(ticker, period="1mo"):
-    """
-    Calls yahoo-finance15 /api/v2/historical
-    Returns a DataFrame with Date index and 'Close' column.
-    """
-    url    = f"https://yahoo-finance15.p.rapidapi.com/api/v2/historical/{ticker}"
-    params = {"period": period}     # 1d, 5d, 1mo, 3mo, 6mo, 1y, etc.
-    resp   = requests.get(url, params=params, headers=RAPID_HEADERS, timeout=10)
+    def _request(per):
+        url = f"https://yahoo-finance15.p.rapidapi.com/api/v2/historical/{ticker}"
+        params = {"period": per}
+        return requests.get(url, params=params, headers=RAPID_HEADERS, timeout=10)
 
+    # 1st try
+    resp = _request(period)
     if resp.status_code == 429:
         raise DataFetchError("RapidAPI quota exceeded (HTTP 429).")
 
     data = resp.json()
-    if not data or "items" not in data or not data["items"]:
-        raise DataFetchError(f"No price data returned for “{ticker}”. Check symbol or period.")
+    if not data or not data.get("items"):
+        # automatic fallback to 5‑day history
+        resp  = _request("5d")
+        data  = resp.json()
+
+    if not data or not data.get("items"):
+        raise DataFetchError(f"No price data returned for “{ticker}”. Likely quota or endpoint limit.")
+
+    # build DataFrame from data["items"] ...
 
     # Build DataFrame
     items = data["items"]
