@@ -18,7 +18,7 @@ client = OpenAI(api_key=st.secrets["openai_api_key"])
 # ───────────────────────────────────────────────
 RAPID_HEADERS = {
     "X-RapidAPI-Key":  st.secrets["rapidapi_key"],
-    "X-RapidAPI-Host": "apidojo-yahoo-finance-v1.p.rapidapi.com",
+    "X-RapidAPI-Host": "yahoo-finance15.p.rapidapi.com",
 }
 
 @st.cache_data(ttl=3600, show_spinner="Fetching price data…")
