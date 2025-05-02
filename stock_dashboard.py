@@ -23,6 +23,10 @@ class DataFetchError(Exception):
 
 # ─── Price history helper with retry & 30s timeout ──────────
 @st.cache_data(ttl=3600, show_spinner="Fetching price data…")
+
+interval = "30m"          # free plan supports 5m, 15m, 30m
+stock_data = get_stock_data(ticker, interval=interval)
+
 def get_stock_data(ticker, interval="1d", attempts=2):
     url = "https://yahoo-finance15.p.rapidapi.com/api/v1/markets/stock/history"
     params = {"symbol": ticker, "interval": interval, "diffandsplits": "false"}
