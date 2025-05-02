@@ -6,4 +6,4 @@ mysql-connector-python
 openai
 plotly
 finnhub-python
-requests==2.32.2
+requests == 2.32.2
