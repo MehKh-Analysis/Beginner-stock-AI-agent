@@ -1,42 +1,41 @@
 # ─────────────────────────────────────────────────────────────
-# Streamlit Stock Helper — RapidAPI yahoo‑finance15 (robust)
+# Streamlit Stock Helper — RapidAPI yahoo-finance15 edition
 # ─────────────────────────────────────────────────────────────
 import streamlit as st
-import requests, pandas as pd, time
-from requests.exceptions import ReadTimeout
+import requests, pandas as pd
 from openai import OpenAI
 import plotly.express as px
 import re
 
-# ─── Secrets ─────────────────────────────────────────────────
+# ─── Secrets expected ────────────────────────────────────────
 # st.secrets["rapidapi_key"]   – RapidAPI key
 # st.secrets["openai_api_key"] – OpenAI key
 
+# ─── RapidAPI header ─────────────────────────────────────────
 RAPID_HEADERS = {
     "X-RapidAPI-Key":  st.secrets["rapidapi_key"],
     "X-RapidAPI-Host": "yahoo-finance15.p.rapidapi.com",
 }
 
-# ─── Custom error for UI messages ────────────────────────────
+# ─── Custom exception for friendly errors ────────────────────
 class DataFetchError(Exception):
     pass
 
-# ─── Price history helper with retry & 30s timeout ──────────
+# ─── Price history helper (v1 history endpoint) ──────────────
 @st.cache_data(ttl=3600, show_spinner="Fetching price data…")
-
-      
-def get_stock_data(ticker, interval="5m", attempts=2):
+def get_stock_data(ticker, interval="1d"):
+    """
+    Calls /api/v1/markets/stock/history
+    interval options: 5m | 15m | 30m | 1h | 1d | 1wk | 1mo | 3mo
+    Returns a DataFrame indexed by datetime with a 'Close' column.
+    """
     url = "https://yahoo-finance15.p.rapidapi.com/api/v1/markets/stock/history"
-    params = {"symbol": ticker, "interval": interval, "diffandsplits": "false"}
-
-    for i in range(attempts):
-        try:
-            resp = requests.get(url, params=params, headers=RAPID_HEADERS, timeout=30)
-            break
-        except ReadTimeout:
-            if i == attempts - 1:
-                raise DataFetchError("RapidAPI server timed out. Try again shortly.")
-            time.sleep(2)
+    params = {
+        "symbol": ticker,
+        "interval": interval,
+        "diffandsplits": "false"
+    }
+    resp = requests.get(url, params=params, headers=RAPID_HEADERS, timeout=10)
 
     if resp.status_code == 429:
         raise DataFetchError("RapidAPI quota exceeded (HTTP 429).")
@@ -45,7 +44,9 @@ def get_stock_data(ticker, interval="5m", attempts=2):
 
     data = resp.json()
     if not data or "items" not in data or not data["items"]:
-        raise DataFetchError(f"No price data returned for “{ticker}” at interval “{interval}”.")
+        raise DataFetchError(
+            f"No price data returned for “{ticker}” at interval “{interval}”."
+        )
 
     df = (
         pd.DataFrame(data["items"])
@@ -57,19 +58,11 @@ def get_stock_data(ticker, interval="5m", attempts=2):
     )
     return df
 
-# ─── Fundamentals helper with same retry logic ──────────────
+# ─── Fundamentals helper ─────────────────────────────────────
 @st.cache_data(ttl=43200, show_spinner="Fetching fundamentals…")
-def get_stock_info(ticker, attempts=2):
-    url = f"https://yahoo-finance15.p.rapidapi.com/api/v2/quote/{ticker}"
-
-    for i in range(attempts):
-        try:
-            resp = requests.get(url, headers=RAPID_HEADERS, timeout=30)
-            break
-        except ReadTimeout:
-            if i == attempts - 1:
-                raise DataFetchError("RapidAPI server timed out when fetching fundamentals.")
-            time.sleep(2)
+def get_stock_info(ticker):
+    url  = f"https://yahoo-finance15.p.rapidapi.com/api/v2/quote/{ticker}"
+    resp = requests.get(url, headers=RAPID_HEADERS, timeout=10)
 
     if resp.status_code == 429:
         raise DataFetchError("RapidAPI quota exceeded (HTTP 429).")
@@ -79,7 +72,7 @@ def get_stock_info(ticker, attempts=2):
         raise DataFetchError(f"No fundamentals returned for “{ticker}”.")
     return data
 
-# ─── Metric extraction (maps yahoo‑finance15 JSON) ──────────
+# ─── Metric extraction (maps new JSON) ───────────────────────
 def extract_key_metrics(info):
     price   = info.get("price", {})
     summary = info.get("summaryDetail", {})
@@ -100,7 +93,7 @@ def extract_key_metrics(info):
         "1‑Year Target Estimate": target.get("raw", "N/A"),
     }
 
-# ─── OpenAI helpers (unchanged) ─────────────────────────────
+# ─── OpenAI helpers (unchanged logic) ────────────────────────
 client = OpenAI(api_key=st.secrets["openai_api_key"])
 
 @st.cache_data(ttl=3600)
@@ -153,7 +146,7 @@ def get_random_stock_fact():
     )
     return resp.choices[0].message.content
 
-# ─── UI header ──────────────────────────────────────────────
+# ─── UI header ───────────────────────────────────────────────
 st.markdown(
     "<h1 style='text-align:center;color:#1f77b4;'>Real‑Time LLM‑Powered AI Agent for Stock‑Market Beginners</h1>",
     unsafe_allow_html=True,
@@ -168,7 +161,7 @@ ticker = st.text_input("Enter a stock ticker (e.g., AAPL, TSLA, AMZN):")
 if ticker:
     st.info(f"💡 Did you know? {get_random_stock_fact()}")
 
-# ─── Main action ────────────────────────────────────────────
+# ─── Main action ─────────────────────────────────────────────
 if st.button("Get Insights") and ticker:
     try:
         stock_data = get_stock_data(ticker)
@@ -200,10 +193,12 @@ if st.button("Get Insights") and ticker:
 
     tab1, tab2 = st.tabs(["📊 Basics", "💡 Insights"])
 
+    # Basics tab
     with tab1:
         st.subheader("🧠 Explanation of Key Terms")
         st.markdown(bolded_explanation)
 
+    # Insights tab
     with tab2:
         st.plotly_chart(price_trend_fig)
 
