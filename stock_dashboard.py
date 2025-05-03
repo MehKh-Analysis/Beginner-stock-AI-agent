@@ -1,158 +1,89 @@
-# ─────────────────────────────────────────────────────────────
-# Streamlit Stock Helper — RapidAPI yahoo-finance15 edition
-# ─────────────────────────────────────────────────────────────
 import streamlit as st
-import requests, pandas as pd
+import yfinance as yf
+import pandas as pd
 from openai import OpenAI
 import plotly.express as px
 import re
 
-# ─── Secrets expected ────────────────────────────────────────
-# st.secrets["rapidapi_key"]   – RapidAPI key
-# st.secrets["openai_api_key"] – OpenAI key
+# Initialize OpenAI client with API key (replace with your actual key as needed)
 
-# ─── RapidAPI header ─────────────────────────────────────────
-RAPID_HEADERS = {
-    "X-RapidAPI-Key":  st.secrets["rapidapi_key"],
-    "X-RapidAPI-Host": "yahoo-finance15.p.rapidapi.com",
-}
-
-# ─── Custom exception for friendly errors ────────────────────
-class DataFetchError(Exception):
-    pass
-
-# ─── Price history helper (v1 history endpoint) ──────────────
-@st.cache_data(ttl=3600, show_spinner="Fetching price data…")
-def get_stock_data(ticker, interval="1d"):
-    """
-    Calls /api/v1/markets/stock/history
-    interval options: 5m | 15m | 30m | 1h | 1d | 1wk | 1mo | 3mo
-    Returns a DataFrame indexed by datetime with a 'Close' column.
-    """
-    url = "https://yahoo-finance15.p.rapidapi.com/api/v1/markets/stock/history"
-    params = {
-        "symbol": ticker,
-        "interval": interval,
-        "diffandsplits": "false"
-    }
-    resp = requests.get(url, params=params, headers=RAPID_HEADERS, timeout=10)
-
-    if resp.status_code == 429:
-        raise DataFetchError("RapidAPI quota exceeded (HTTP 429).")
-    if resp.status_code == 404:
-        raise DataFetchError(f"Ticker “{ticker}” not found.")
-
-    data = resp.json()
-    if not data or "items" not in data or not data["items"]:
-        raise DataFetchError(
-            f"No price data returned for “{ticker}” at interval “{interval}”."
-        )
-
-    df = (
-        pd.DataFrame(data["items"])
-          .assign(Date=lambda d: pd.to_datetime(d["date"], unit="s"))
-          .set_index("Date")
-          [["close"]]
-          .rename(columns={"close": "Close"})
-          .sort_index()
-    )
-    return df
-
-# ─── Fundamentals helper ─────────────────────────────────────
-@st.cache_data(ttl=43200, show_spinner="Fetching fundamentals…")
-def get_stock_info(ticker):
-    url  = f"https://yahoo-finance15.p.rapidapi.com/api/v2/quote/{ticker}"
-    resp = requests.get(url, headers=RAPID_HEADERS, timeout=10)
-
-    if resp.status_code == 429:
-        raise DataFetchError("RapidAPI quota exceeded (HTTP 429).")
-
-    data = resp.json()
-    if "price" not in data:
-        raise DataFetchError(f"No fundamentals returned for “{ticker}”.")
-    return data
-
-# ─── Metric extraction (maps new JSON) ───────────────────────
-def extract_key_metrics(info):
-    price   = info.get("price", {})
-    summary = info.get("summaryDetail", {})
-    calendar= info.get("calendarEvents", {}).get("earnings", {})
-    target  = info.get("financialData", {}).get("targetMeanPrice", {})
-
-    day_low  = summary.get("dayLow",  {}).get("raw", "N/A")
-    day_high = summary.get("dayHigh", {}).get("raw", "N/A")
-
-    return {
-        "Previous Close": price.get("regularMarketPreviousClose", {}).get("raw", "N/A"),
-        "Open":           price.get("regularMarketOpen", {}).get("raw", "N/A"),
-        "Bid":            summary.get("bid", {}).get("raw", "N/A"),
-        "Day's Range":    f"{day_low} – {day_high}",
-        "Average Volume": summary.get("averageVolume", {}).get("raw", "N/A"),
-        "Market Cap":     summary.get("marketCap", {}).get("fmt", "N/A"),
-        "Earnings Date":  calendar[0].get("fmt", "N/A") if calendar else "N/A",
-        "1‑Year Target Estimate": target.get("raw", "N/A"),
-    }
-
-# ─── OpenAI helpers (unchanged logic) ────────────────────────
 client = OpenAI(api_key=st.secrets["openai_api_key"])
 
 @st.cache_data(ttl=3600)
+def get_stock_data(ticker, period="1mo", interval="1d"):
+    stock = yf.Ticker(ticker)
+    history = stock.history(period=period, interval=interval)
+    return history
+
+def extract_key_metrics(info):
+    return {
+        "Previous Close": info.get("previousClose", "N/A"),
+        "Open": info.get("open", "N/A"),
+        "Bid": info.get("bid", "N/A"),
+        "Day's Range": f"{info.get('dayLow', 'N/A')} - {info.get('dayHigh', 'N/A')}",
+        "Average Volume": info.get("averageVolume", "N/A"),
+        "Market Cap": info.get("marketCap", "N/A"),
+        "Earnings Date": info.get("earningsDate", "N/A"),
+        "1-Year Target Estimate": info.get("targetMeanPrice", "N/A")
+    }
+
+@st.cache_data(ttl=3600)
 def generate_explanation(ticker, metrics):
-    metric_text = "\n".join(f"- {k}: {v}" for k, v in metrics.items())
+    metric_text = "\n".join([f"- {k}: {v}" for k, v in metrics.items()])
     prompt = (
         f"A user has looked up the stock {ticker}. Here are some key metrics:\n"
         f"{metric_text}\n\n"
         "Please explain each term and its value in simple terms suitable for someone new to investing."
     )
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
+        messages=[{"role": "system", "content": prompt}]
     )
-    return resp.choices[0].message.content
+    return response.choices[0].message.content
 
 @st.cache_data(ttl=3600)
 def summarize_stock_data(ticker, history):
     prompt = (
-        f"Based on recent stock data for {ticker}, summarize the short-term price trend "
-        "and potential risks in no more than 2–3 beginner-friendly sentences."
+        f"Based on recent stock data for {ticker}, summarize the short-term price trend and potential risks. "
+        "Keep it short and simple, no more than 2-3 sentences, suitable for a beginner investor."
     )
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
+        messages=[{"role": "system", "content": prompt}]
     )
-    return resp.choices[0].message.content
+    return response.choices[0].message.content
 
 def generate_sentiment(ticker, history):
     prompt = (
-        f"A beginner investor is considering buying {ticker}. Recent price data:\n"
+        f"A beginner investor is considering buying {ticker}. Based on this stock's recent price data:\n"
         f"{history.tail(5).to_string()}\n\n"
-        "Give a short 2‑3 sentence reaction summarizing appeal, risk, and outlook in a casual tone."
+        "Give a short 2-3 sentence reaction summarizing the investment appeal, risk level, and outlook in a casual tone."
     )
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
+        messages=[{"role": "system", "content": prompt}]
     )
-    return resp.choices[0].message.content
+    return response.choices[0].message.content
 
 @st.cache_data(ttl=3600)
 def get_random_stock_fact():
     prompt = (
-        "Give me one short, surprising, or educational stock‑market fact a beginner might not know. "
+        "Give me one short, surprising, or educational stock market fact that a beginner investor might not know. "
         "Make it fun and easy to remember."
     )
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4",
-        messages=[{"role": "system", "content": prompt}],
+        messages=[{"role": "system", "content": prompt}]
     )
-    return resp.choices[0].message.content
+    return response.choices[0].message.content
 
-# ─── UI header ───────────────────────────────────────────────
+# Title
 st.markdown(
-    "<h1 style='text-align:center;color:#1f77b4;'>Real‑Time LLM‑Powered AI Agent for Stock‑Market Beginners</h1>",
-    unsafe_allow_html=True,
+    "<h1 style='text-align: center; color: #1f77b4;'>Real-Time LLM-Powered AI Agent for Stock Market Beginners</h1>",
+    unsafe_allow_html=True
 )
 
-if st.button("🔄 Clear Cache"):
+if st.button('🔄 Clear Cache'):
     st.cache_data.clear()
     st.success("Cache cleared! Please rerun the app.")
 
@@ -161,59 +92,49 @@ ticker = st.text_input("Enter a stock ticker (e.g., AAPL, TSLA, AMZN):")
 if ticker:
     st.info(f"💡 Did you know? {get_random_stock_fact()}")
 
-# ─── Main action ─────────────────────────────────────────────
-if st.button("Get Insights") and ticker:
-    try:
+if st.button("Get Insights"):
+    if ticker:
         stock_data = get_stock_data(ticker)
-        info       = get_stock_info(ticker)
-    except DataFetchError as e:
-        st.error(f"❌ {e}")
-        st.stop()
-    except Exception as e:
-        st.error(f"Unexpected error: {e}")
-        st.stop()
+        info = yf.Ticker(ticker).info
+        key_metrics = extract_key_metrics(info)
 
-    key_metrics  = extract_key_metrics(info)
-    summary      = summarize_stock_data(ticker, stock_data)
-    explanation  = generate_explanation(ticker, key_metrics)
-    sentiment    = generate_sentiment(ticker, stock_data)
+        summary = summarize_stock_data(ticker, stock_data)
+        explanation = generate_explanation(ticker, key_metrics)
+        sentiment = generate_sentiment(ticker, stock_data)
 
-    # Recent price table
-    recent = stock_data.tail(5).copy()
-    recent["Daily Change %"] = (recent["Close"].pct_change().fillna(0) * 100).round(2)
+        # Prepare recent data for display
+        recent = stock_data.tail(5).copy()
+        recent["Daily Change %"] = recent["Close"].pct_change().fillna(0) * 100
+        recent["Daily Change %"] = recent["Daily Change %"].round(2)
 
-    # Price trend chart
-    price_trend_fig = px.line(
-        stock_data, x=stock_data.index, y="Close",
-        title=f"{ticker.upper()} – Closing Price Over Time",
-    )
+        # Create interactive charts for price trend and volume
+        price_trend_fig = px.line(stock_data, x=stock_data.index, y='Close', title=f"{ticker.upper()} - Closing Price Over Time")
+        volume_fig = px.bar(stock_data, x=stock_data.index, y='Volume', title=f"{ticker.upper()} - Daily Trading Volume")
 
-    # Bold metric names
-    bolded_explanation = re.sub(r"- ([^:]+):", r"- **\\1**:", explanation)
+        # Highlight key terms in the explanation
+        bolded_explanation = re.sub(r"- ([^:]+):", r"- **\1**:", explanation)
 
-    tab1, tab2 = st.tabs(["📊 Basics", "💡 Insights"])
+        tab1, tab2 = st.tabs(["📊 Basics", "💡 Insights"])
 
-    # Basics tab
-    with tab1:
-        st.subheader("🧠 Explanation of Key Terms")
-        st.markdown(bolded_explanation)
-
-    # Insights tab
-    with tab2:
-        st.plotly_chart(price_trend_fig)
+        with tab1:
+            st.subheader("🧠 Explanation of Key Terms You Really Need in the Market")
+            st.markdown(bolded_explanation)
 
         st.subheader("📌 Recent Stock Data")
         st.dataframe(
-            recent.style
-                  .highlight_max(subset=["Daily Change %"], color="green")
-                  .highlight_min(subset=["Daily Change %"], color="red")
+            recent.style.highlight_max(subset=['Daily Change %'], color='green')
+                         .highlight_min(subset=['Daily Change %'], color='red')
         )
 
-        st.subheader("📝 Summary of Recent Prices")
-        st.write(summary)
+        with tab2:
+            st.plotly_chart(price_trend_fig)
+            st.plotly_chart(volume_fig)
 
-        st.subheader("🤔 Should I Buy This?")
-        st.info(sentiment)
+            st.subheader("📝 Summary of Recent Prices")
+            st.write(summary)
 
-        st.subheader("📊 Key Metrics")
-        st.json(key_metrics)
+            st.subheader("🤔 Should I Buy This?")
+            st.info(sentiment)
+
+            st.subheader("📊 Key Metrics")
+            st.json(key_metrics)
