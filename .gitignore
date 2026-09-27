@@ -1,1 +1,16 @@
 .streamlit/secrets.toml
+# macOS system files
+.DS_Store
+
+# Secrets (keeps your OpenAI API key out of GitHub)
+.streamlit/secrets.toml
+.env
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
